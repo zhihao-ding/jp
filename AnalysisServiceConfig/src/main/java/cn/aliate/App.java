@@ -37,8 +37,8 @@ class ServiceConfig {
 
 public class App 
 {
-    private static final String CONFIG_FOLDER 
-        = "/Users/zhihao/github/zstack/conf/serviceConfig";
+    //private static final String CONFIG_FOLDER 
+    //    = "/Users/zhihao/github/zstack/conf/serviceConfig";
 
     private static Map<String, Set<ServiceConfig>> services = new HashMap<String, Set<ServiceConfig>>();
 
@@ -101,9 +101,17 @@ public class App
     }
 
     public static void main( String[] args ) {
+
+        if (args.length < 1) {
+            System.out.println("Usage:AnalysisServiceConfig <ConfigFile> <serviceId>");
+            System.exit(1);
+        }
+        
+        String configFolder = args[0];
+
         try {
             JAXBContext context = JAXBContext.newInstance("cn.aliate.schema");
-            List<String> paths = scanFolder(CONFIG_FOLDER);
+            List<String> paths = scanFolder(configFolder);
             for (String p: paths) {
                 if (!p.endsWith(".xml")) {
                     System.out.println(String.format("ignore %s which is not ending with .xml", p));
@@ -121,10 +129,10 @@ public class App
             throw new RuntimeException(e);
         }
 
-        if (args.length == 0) {
+        if (args.length == 1) {
             showAllServices();
         } else {
-            showServiceDetails(args[0]);
+            showServiceDetails(args[1]);
         }
     }
 }
