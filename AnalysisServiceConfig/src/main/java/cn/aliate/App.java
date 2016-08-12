@@ -8,40 +8,20 @@ import javax.xml.bind.Unmarshaller;
 import java.io.File;
 import java.lang.reflect.Field;
 import java.util.*;
-
-class ServiceConfig {
-    private String filename;
-    private Service service;
-
-    public ServiceConfig(String filename, Service service) {
-        this.filename = filename;
-        this.service = service;
-    }
-
-    public String getFilename() {
-        return filename; 
-    }
-    
-    public void setFilename(String filename) {
-        this.filename = filename; 
-    }
-    
-    public Service getService() {
-        return service; 
-    }
-    
-    public void setService(Service service) { 
-        this.service = service; 
-    }
-}
+import java.lang.StringBuilder;
 
 public class App 
 {
-    //private static final String CONFIG_FOLDER 
-    //    = "/Users/zhihao/github/zstack/conf/serviceConfig";
+    private Map<String, ApiMessageDescriptor> descriptors = new HashMap<String, ApiMessageDescriptor>();
+    private Set<String> serviceIds = new HashSet<String>();
 
-    private static Map<String, Set<ServiceConfig>> services = new HashMap<String, Set<ServiceConfig>>();
-
+    private static String getConfigFolderFromEnvironment() {
+        String configFolder = System.getenv().get("CONFIG_FOLDER");
+        if (configFolder == null) {
+            throw new RuntimeException("No variable CONFIG_FOLDER in environment!");
+        }
+        return configFolder;
+    }
 
     private static List<String> scanFolder(String folderName) {
         try {
@@ -57,58 +37,8 @@ public class App
         }
     }
 
-    private static void populateService(String filename, Service schema) {
-        Set<ServiceConfig> scs = services.get(schema.getId());
-        if (scs == null) {
-            scs = new HashSet<ServiceConfig>();
-            services.put(schema.getId(), scs);
-        }
-        ServiceConfig sc = new ServiceConfig(filename, schema);
-        scs.add(sc);
-    }
-
-    private static void showAllServices() {
-        System.out.println("All services: ");
-        for (String serviceId: services.keySet()) {
-            System.out.println(serviceId);
-        }
-    }
-
-    private static void showServiceDetails(String serviceId) {
-        System.out.println("Show info of service: " + serviceId);
-        Set<ServiceConfig> scs = services.get(serviceId);
-        if (scs == null ) {
-            System.out.println("No info about service: " + serviceId);
-        }
-        for (ServiceConfig sc: scs) {
-            System.out.println();
-            System.out.println("config file: " + sc.getFilename());
-            System.out.println("intercepter: " + sc.getService().getInterceptor());
-            for (Service.Message msg: sc.getService().getMessage()) {
-                System.out.println(msg.getName());
-            }
-        }
-    }
-
-    private static void showDescription(Service schema, String cfgPath) {
-        System.out.println("\tid: " + schema.getId());
-        for (String interceptor: schema.getInterceptor()) {
-            System.out.println("\tinterceptor: " + interceptor);
-        }
-        for (Service.Message msg: schema.getMessage()) {
-            System.out.println("\t" + msg.getName() + ": " + msg.getServiceId());
-        }
-    }
-
-    public static void main( String[] args ) {
-
-        if (args.length < 1) {
-            System.out.println("Usage:AnalysisServiceConfig <ConfigFile> <serviceId>");
-            System.exit(1);
-        }
-        
-        String configFolder = args[0];
-
+    public App() {
+        String configFolder = getConfigFolderFromEnvironment();
         try {
             JAXBContext context = JAXBContext.newInstance("cn.aliate.schema");
             List<String> paths = scanFolder(configFolder);
@@ -118,21 +48,138 @@ public class App
                     continue;
                 }
 
-                //System.out.println("process file: " + p);
                 File cfg = new File(p);
                 Unmarshaller ums = context.createUnmarshaller();
                 Service schema = (Service)ums.unmarshal(cfg);
-                //showDescription(schema, cfg.getAbsolutePath());
                 populateService(p, schema);
             }
         } catch (JAXBException e) {
             throw new RuntimeException(e);
         }
+    }
 
-        if (args.length == 1) {
-            showAllServices();
+    private void populateDescriptorToStringBuilder(StringBuilder sb, ApiMessageDescriptor desc) {
+        sb.append("\n-----------------------------------------------------");
+        sb.append(String.format("\nname: %s", desc.getName()));
+        sb.append(String.format("\nconfigured service id: %s", desc.getServiceId()));
+        sb.append(String.format("\nconfig path: %s", desc.getConfigPath()));
+        sb.append(String.format("\ninterceptors: %s", desc.getInterceptors()));
+        sb.append("\n-----------------------------------------------------");
+    }
+
+    private void showApiMessageDescriptor(String message) {
+        ApiMessageDescriptor desc = descriptors.get(message);
+        if (desc == null) {
+            System.out.println(String.format("No Descriptor about message: %s", message));
+            return;
+        }
+        StringBuilder sb = new StringBuilder();
+        populateDescriptorToStringBuilder(sb, desc);
+        System.out.println(sb.toString());
+    }
+
+    public void dump() {
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, ApiMessageDescriptor> e: descriptors.entrySet()) {
+            ApiMessageDescriptor desc = e.getValue();
+            populateDescriptorToStringBuilder(sb, desc);
+        }
+        System.out.println(String.format("ApiMessageDescriptor dump: %s", sb.toString()));
+    }
+
+    private void prepareInterceptors(ApiMessageDescriptor desc, Service.Message msg, Service schema) {
+        List<String> interceptors = new ArrayList<String>();
+        interceptors.addAll(msg.getInterceptor());
+        interceptors.addAll(schema.getInterceptor());
+        // GlobalApiMessageInterceptor FRON END SYSTEM
+        desc.setInterceptors(interceptors); 
+    }
+
+    private void populateService(String configPath, Service schema) {
+        for (Service.Message msg: schema.getMessage()) {
+            ApiMessageDescriptor old = descriptors.get(msg.getName());
+            if (old != null) {
+                throw new RuntimeException(String.format(
+                            "Duplicate message description. Message[%s] is described in %s and %s",
+                            msg.getName(), old.getConfigPath(), configPath));
+            }
+
+            ApiMessageDescriptor desc = new ApiMessageDescriptor();
+            desc.setName(msg.getName());
+            String serviceId = msg.getServiceId() != null ? msg.getServiceId() : schema.getId();
+            desc.setServiceId(serviceId);
+            desc.setConfigPath(configPath);
+
+            serviceIds.add(serviceId);
+
+            prepareInterceptors(desc, msg, schema);
+            descriptors.put(msg.getName(), desc);
+        }
+    }
+
+    public void showAllServices() {
+        System.out.println("All services: ");
+        for (String serviceId: serviceIds) {
+            System.out.println("\t" + serviceId);
+        }
+    }
+
+    public void showServiceInfo(String serviceId) {
+        System.out.println("Show info of service: " + serviceId);
+        for (Map.Entry<String, ApiMessageDescriptor> e: descriptors.entrySet()) {
+            ApiMessageDescriptor desc = e.getValue();
+            if (serviceId.equals(desc.getServiceId())) {
+                System.out.println(desc.getName());
+            }
+        }
+    }
+
+    public void showMessageInfo(String messageName) {
+        System.out.println("Show info of message: " + messageName);
+        List<String> queryMessages = new ArrayList<String>();
+        for (String message: descriptors.keySet()) {
+            if (message.contains(messageName)) {
+                queryMessages.add(message);
+            }
+        }
+        for (String message: queryMessages) {
+            showApiMessageDescriptor(message);
+        }
+    }
+
+    public static void main( String[] args ) {
+        App app = new App();
+
+        String serviceId = null;
+        String messageName = null;
+        boolean dump = false;
+        boolean listService = false;
+        for (int i = 0; i < args.length; ++i) {
+            if ("-s".equals(args[i])) {
+                serviceId = args[++i];
+            } else if ("-m".equals(args[i])) {
+                messageName = args[++i];
+            } else if ("dump".equals(args[i])) {
+                dump = true;
+            } else if ("list-service".equals(args[i])) {
+                listService = true;
+            }
+        }
+
+        if (serviceId != null) {
+            app.showServiceInfo(serviceId);
+        } else if (messageName != null) {
+            app.showMessageInfo(messageName);
+        } else if (dump) {
+            app.dump();
+        } else if (listService) {
+            app.showAllServices();
         } else {
-            showServiceDetails(args[1]);
+            System.out.println("Usage: App \\");
+            System.out.println("\t-s <serviceId>");
+            System.out.println("\t-m <messageName> dump list-service");
+            System.out.println("\tdump list-service");
+            System.out.println("\tlist-service");
         }
     }
 }
